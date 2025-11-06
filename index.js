@@ -7,50 +7,62 @@ app.use(cors());
 
 let cache = null;
 let lastFetch = 0;
-const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+const CACHE_DURATION = 60 * 1000; // 1 minute
 
-async function fetchCoinData() {
+// Function to fetch and cache data
+async function fetchCoinData(force = false) {
+  const now = Date.now();
+  if (!force && cache && now - lastFetch < CACHE_DURATION) {
+    console.log("✅ Using cached data");
+    return cache;
+  }
+
+  console.log("🌍 Fetching data from CoinGecko...");
   try {
-    const response = await axios.get("https://api.coingecko.com/api/v3/coins/markets", {
-      params: {
-        vs_currency: "usd",
-        order: "market_cap_desc",
-        per_page: 250,
-        page: 1,
-        sparkline: false,
-      },
-      timeout: 10000,
-    });
+    const response = await axios.get(
+      "https://api.coingecko.com/api/v3/coins/markets",
+      {
+        params: {
+          vs_currency: "usd",
+          order: "market_cap_desc",
+          per_page: 250,
+          page: 1,
+          sparkline: false,
+        },
+      }
+    );
+
     cache = response.data;
-    lastFetch = Date.now();
+    lastFetch = now;
     console.log("✅ Fresh data fetched from CoinGecko");
-  } catch (err) {
-    console.warn("⚠️ CoinGecko fetch failed:", err.message);
+    return cache;
+
+  } catch (error) {
+    console.error("❌ Error fetching from CoinGecko:", error.message);
+    // Return cached data even if fresh fetch fails
+    if (cache) {
+      console.warn("⚠️ Serving stale cache");
+      return cache;
+    }
+    throw error;
   }
 }
 
 app.get("/api/prices", async (req, res) => {
-  const now = Date.now();
-  const limit = parseInt(req.query.limit) || 250;
-
-  // Refresh if cache is old or missing
-  if (!cache || now - lastFetch > CACHE_DURATION) {
-    await fetchCoinData();
+  try {
+    const data = await fetchCoinData();
+    const limit = parseInt(req.query.limit) || 250;
+    res.json(data.slice(0, limit));
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch from CoinGecko" });
   }
-
-  if (cache) {
-    res.json(cache.slice(0, limit));
-  } else {
-    res.status(200).json([]); // respond safely with empty array
-  }
-});
-
-app.get("/", (_, res) => {
-  res.send("✅ CoinGecko Wrapper is running");
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`✅ Server running on port ${PORT}`);
-  fetchCoinData(); // pre-load cache
-});
+
+// Warm cache at startup
+fetchCoinData(true)
+  .then(() => console.log("🟢 Cache preloaded"))
+  .catch(err => console.warn("⚠️ Warm-up failed:", err.message));
+
+app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
