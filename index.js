@@ -46,4 +46,10 @@ app.get("/api/prices", async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
+
+// Warm up cache when the server starts
+fetchCoinData()
+  .then(() => console.log("🟢 Cache pre-loaded with CoinGecko data"))
+  .catch(err => console.warn("⚠️ Warm-up failed:", err.message));
+
 app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
