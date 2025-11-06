@@ -10,10 +10,11 @@ let cache = null;
 let lastFetch = 0;
 const CACHE_DURATION = 60 * 1000; // 1 minute
 
+// ✅ Define fetchCoinData BEFORE calling it
 async function fetchCoinData() {
   const now = Date.now();
 
-  // Use cached data if it's fresh
+  // Use cached data if it's still valid
   if (cache && now - lastFetch < CACHE_DURATION) {
     console.log("Serving from cache");
     return cache;
@@ -51,7 +52,7 @@ app.get("/api/prices", async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 
-// Warm up cache when the server starts
+// ✅ Warm up cache AFTER defining the function
 fetchCoinData()
   .then(() => console.log("🟢 Cache pre-loaded with CoinGecko data"))
   .catch(err => console.warn("⚠️ Warm-up failed:", err.message));
