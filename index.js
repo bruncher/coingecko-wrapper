@@ -5,25 +5,13 @@ import cors from "cors";
 const app = express();
 app.use(cors());
 
-// Simple cache to avoid hitting CoinGecko too often
 let cache = null;
 let lastFetch = 0;
-const CACHE_DURATION = 60 * 1000; // 1 minute
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
-// ✅ Define fetchCoinData BEFORE calling it
 async function fetchCoinData() {
-  const now = Date.now();
-
-  // Use cached data if it's still valid
-  if (cache && now - lastFetch < CACHE_DURATION) {
-    console.log("Serving from cache");
-    return cache;
-  }
-
-  console.log("Fetching fresh data from CoinGecko...");
-  const response = await axios.get(
-    "https://api.coingecko.com/api/v3/coins/markets",
-    {
+  try {
+    const response = await axios.get("https://api.coingecko.com/api/v3/coins/markets", {
       params: {
         vs_currency: "usd",
         order: "market_cap_desc",
@@ -31,30 +19,38 @@ async function fetchCoinData() {
         page: 1,
         sparkline: false,
       },
-    }
-  );
-
-  cache = response.data;
-  lastFetch = now;
-  return cache;
+      timeout: 10000,
+    });
+    cache = response.data;
+    lastFetch = Date.now();
+    console.log("✅ Fresh data fetched from CoinGecko");
+  } catch (err) {
+    console.warn("⚠️ CoinGecko fetch failed:", err.message);
+  }
 }
 
 app.get("/api/prices", async (req, res) => {
-  try {
-    const limit = parseInt(req.query.limit) || 250;
-    const data = await fetchCoinData();
-    res.json(data.slice(0, limit));
-  } catch (error) {
-    console.error("Error fetching from CoinGecko:", error.message);
-    res.status(500).json({ error: "Failed to fetch from CoinGecko" });
+  const now = Date.now();
+  const limit = parseInt(req.query.limit) || 250;
+
+  // Refresh if cache is old or missing
+  if (!cache || now - lastFetch > CACHE_DURATION) {
+    await fetchCoinData();
+  }
+
+  if (cache) {
+    res.json(cache.slice(0, limit));
+  } else {
+    res.status(200).json([]); // respond safely with empty array
   }
 });
 
+app.get("/", (_, res) => {
+  res.send("✅ CoinGecko Wrapper is running");
+});
+
 const PORT = process.env.PORT || 3000;
-
-// ✅ Warm up cache AFTER defining the function
-fetchCoinData()
-  .then(() => console.log("🟢 Cache pre-loaded with CoinGecko data"))
-  .catch(err => console.warn("⚠️ Warm-up failed:", err.message));
-
-app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`✅ Server running on port ${PORT}`);
+  fetchCoinData(); // pre-load cache
+});
