@@ -7,7 +7,7 @@ app.use(cors());
 
 let cache = null;
 let lastFetch = 0;
-const CACHE_DURATION = 60 * 1000; // 1 minute
+const CACHE_DURATION = 15 * 60 * 1000; // 15 minutes
 
 // Fetch CoinGecko data with built-in caching
 async function fetchCoinData(force = false) {
@@ -51,11 +51,24 @@ app.get("/api/prices", async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 250;
     const data = await fetchCoinData();
-    res.json(data.slice(0, limit));
+
+    res.json({
+      last_updated: new Date(lastFetch).toISOString(),
+      data: data.slice(0, limit),
+    });
   } catch (err) {
+    if (cache) {
+      console.log("⚠️ Serving stale cache to client");
+      return res.json({
+        last_updated: new Date(lastFetch).toISOString(),
+        data: cache.slice(0, 250),
+        stale: true,
+      });
+    }
     res.status(500).json({ error: "Failed to fetch from CoinGecko" });
   }
 });
+
 
 const PORT = process.env.PORT || 3000;
 
