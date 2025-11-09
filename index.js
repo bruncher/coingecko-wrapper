@@ -50,9 +50,10 @@ async function fetchCoinData(force = false) {
 
       if (cache) {
         console.log("⚠️ Returning stale cache data");
-        // Still return stale cache even on 429
+        // Just return old cache — users still get data
       } else {
-        throw err; // No cache to return
+        console.warn("⚠️ No cache available — retry will handle it");
+        throw err; // only throw if no cache yet
       }
     } finally {
       fetchPromise = null;
@@ -78,16 +79,32 @@ app.get("/api/prices", async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 
-async function warmUp() {
-  try {
-    await fetchCoinData(true);
-    console.log("🟢 Cache preloaded successfully");
-  } catch (err) {
-    console.warn("⚠️ Warm-up failed, retrying in 60s...");
-    setTimeout(warmUp, 60000);
+// --- Improved Warm-Up Sequence ---
+async function warmUp(retries = 3, delay = 30000) {
+  console.log("🚀 Starting warm-up...");
+  for (let i = 0; i < retries; i++) {
+    try {
+      await fetchCoinData(true);
+      console.log("🟢 Cache preloaded successfully");
+      return;
+    } catch (err) {
+      console.warn(`⚠️ Warm-up failed (attempt ${i + 1}): ${err.message}`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
   }
+  console.error("❌ All warm-up attempts failed — will retry in 5 min");
+  setTimeout(warmUp, 5 * 60 * 1000);
 }
 
-warmUp();
+// Add short delay before first warm-up to avoid CoinGecko rate-limits on cold boot
+setTimeout(() => warmUp(), 10000);
+
+// --- Optional Keep-Alive Ping (prevents sleeping) ---
+setInterval(() => {
+  axios
+    .get(`http://localhost:${PORT}/api/prices?limit=1`)
+    .then(() => console.log("💤 Keep-alive ping OK"))
+    .catch(() => console.warn("💤 Keep-alive ping failed"));
+}, 10 * 60 * 1000); // every 10 min
 
 app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
