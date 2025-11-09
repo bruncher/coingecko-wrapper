@@ -10,7 +10,7 @@ let lastFetch = 0;
 let fetchPromise = null;
 
 const CACHE_DURATION = 15 * 60 * 1000; // 15 minutes
-const KEEP_ALIVE_INTERVAL = 10 * 60 * 1000; // 10 minutes for self-ping
+const KEEP_ALIVE_INTERVAL = 10 * 60 * 1000; // 10 minutes
 const PORT = process.env.PORT || 3000;
 const SELF_URL = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
 
@@ -19,22 +19,25 @@ const SELF_URL = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
 // -----------------------------
 async function fetchCoinData(force = false) {
   const now = Date.now();
+  const sinceLast = ((now - lastFetch) / 1000).toFixed(1);
+
+  console.log(`\n🧩 fetchCoinData(force=${force}) — last fetch ${sinceLast}s ago`);
 
   // Serve from cache if still fresh
   if (!force && cache && now - lastFetch < CACHE_DURATION) {
-    console.log("🟢 Serving from cache");
+    console.log("🟢 Cache still fresh — serving from cache");
     return cache;
   }
 
   // If another request is already fetching, reuse that promise
   if (fetchPromise) {
-    console.log("🕓 Waiting for ongoing fetch...");
+    console.log("🕓 Another fetch in progress — waiting...");
     return fetchPromise;
   }
 
   // Otherwise, start a new fetch
   fetchPromise = (async () => {
-    console.log("🌍 Fetching data from CoinGecko...");
+    console.log("🌍 Fetching data from CoinGecko API...");
     try {
       const response = await axios.get(
         "https://api.coingecko.com/api/v3/coins/markets",
@@ -52,21 +55,21 @@ async function fetchCoinData(force = false) {
 
       cache = response.data;
       lastFetch = now;
-      console.log("✅ Fresh data fetched from CoinGecko");
+      console.log(`✅ Fetched ${cache.length} coins successfully`);
     } catch (err) {
-      console.error("❌ Error fetching from CoinGecko:", err.message);
+      console.error(`❌ CoinGecko fetch failed: ${err.message}`);
 
       if (err.response?.status === 429) {
-        console.warn("⚠️ Rate limited — returning stale cache if available");
+        console.warn("⚠️ Rate limit (429) — using stale cache if available");
         if (cache) return cache;
       }
 
       if (cache) {
-        console.log("⚠️ Returning stale cache data");
+        console.warn("⚠️ Returning stale cache from previous fetch");
         return cache;
       } else {
-        console.warn("⚠️ No cache available — retry will handle it");
-        throw err; // No cache to return yet
+        console.error("🚨 No cache available — will retry later");
+        throw err;
       }
     } finally {
       fetchPromise = null;
@@ -79,9 +82,10 @@ async function fetchCoinData(force = false) {
 }
 
 // -----------------------------
-// API Route
+// API route
 // -----------------------------
 app.get("/api/prices", async (req, res) => {
+  console.log(`📡 /api/prices requested (limit=${req.query.limit || 250})`);
   try {
     const limit = parseInt(req.query.limit) || 250;
     const data = await fetchCoinData();
@@ -93,13 +97,25 @@ app.get("/api/prices", async (req, res) => {
 });
 
 // -----------------------------
-// Warm-Up Logic (delay + backoff retries)
+// Health route for monitoring
+// -----------------------------
+app.get("/health", (req, res) => {
+  res.json({
+    status: "ok",
+    lastFetch: new Date(lastFetch).toISOString(),
+    cacheAgeSec: ((Date.now() - lastFetch) / 1000).toFixed(0),
+    cacheReady: !!cache,
+  });
+});
+
+// -----------------------------
+// Warm-Up Logic (delay + retries)
 // -----------------------------
 async function warmUp(attempt = 1) {
-  console.log(`🚀 Starting warm-up (attempt ${attempt})...`);
+  console.log(`🚀 Warm-up starting (attempt ${attempt})...`);
   try {
     await fetchCoinData(true);
-    console.log("🟢 Cache preloaded successfully");
+    console.log("🟢 Warm-up successful — cache ready");
   } catch (err) {
     console.warn(`⚠️ Warm-up failed (attempt ${attempt}): ${err.message}`);
     if (attempt < 5) {
@@ -107,21 +123,21 @@ async function warmUp(attempt = 1) {
       console.log(`⏳ Retrying warm-up in ${delay / 1000}s...`);
       setTimeout(() => warmUp(attempt + 1), delay);
     } else {
-      console.warn("❌ Warm-up failed too many times, will rely on live fetches.");
+      console.error("❌ Warm-up failed too many times — giving up for now");
     }
   }
 }
 
 // -----------------------------
-// Keep-Alive Ping (prevents Render from sleeping)
+// Keep-Alive Pinger
 // -----------------------------
 function startKeepAlive() {
   if (SELF_URL.includes("localhost")) return; // skip locally
-  console.log("🔄 Keep-alive pinger started every 10 minutes...");
+  console.log(`🔄 Keep-alive pinger active — every ${KEEP_ALIVE_INTERVAL / 60000} min`);
   setInterval(async () => {
     try {
-      await axios.get(`${SELF_URL}/api/prices`);
-      console.log("💓 Keep-alive ping successful");
+      await axios.get(`${SELF_URL}/health`);
+      console.log("💓 Keep-alive ping OK");
     } catch (err) {
       console.warn("⚠️ Keep-alive ping failed:", err.message);
     }
@@ -129,12 +145,12 @@ function startKeepAlive() {
 }
 
 // -----------------------------
-// Start Server
+// Server Start
 // -----------------------------
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
-  // Delay warm-up by 30s to avoid CoinGecko cold-start 429
+  console.log(`🌐 Public URL: ${SELF_URL}`);
+  console.log("⏳ Waiting 30s before first warm-up...");
   setTimeout(warmUp, 30000);
-  // Start self-pinging to stay awake (free keep-alive)
   startKeepAlive();
 });
