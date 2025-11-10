@@ -5,70 +5,63 @@ import cors from "cors";
 const app = express();
 app.use(cors());
 
+// === Cache + timing ===
 let cache = null;
 let lastFetch = 0;
 let fetchPromise = null;
+const CACHE_DURATION = 15 * 60 * 1000; // 15 min
+const COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/markets";
 
-const CACHE_DURATION = 15 * 60 * 1000; // 15 minutes
-const KEEP_ALIVE_INTERVAL = 10 * 60 * 1000; // 10 minutes
-const PORT = process.env.PORT || 3000;
-const SELF_URL = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
-
-// -----------------------------
-// Fetch Data (with caching + 429 tolerance)
-// -----------------------------
+// === Fetch logic ===
 async function fetchCoinData(force = false) {
   const now = Date.now();
-  const sinceLast = ((now - lastFetch) / 1000).toFixed(1);
 
-  console.log(`\n🧩 fetchCoinData(force=${force}) — last fetch ${sinceLast}s ago`);
-
-  // Serve from cache if still fresh
+  // Serve from cache if recent enough
   if (!force && cache && now - lastFetch < CACHE_DURATION) {
-    console.log("🟢 Cache still fresh — serving from cache");
+    console.log("🟢 Serving from cache");
     return cache;
   }
 
-  // If another request is already fetching, reuse that promise
+  // Avoid concurrent fetches
   if (fetchPromise) {
-    console.log("🕓 Another fetch in progress — waiting...");
+    console.log("🕓 Waiting for ongoing fetch...");
     return fetchPromise;
   }
 
-  // Otherwise, start a new fetch
   fetchPromise = (async () => {
-    console.log("🌍 Fetching data from CoinGecko API...");
+    console.log(`🧩 fetchCoinData(force=${force}) — last fetch ${((now - lastFetch) / 1000).toFixed(1)}s ago`);
     try {
-      const response = await axios.get(
-        "https://api.coingecko.com/api/v3/coins/markets",
-        {
-          params: {
-            vs_currency: "usd",
-            order: "market_cap_desc",
-            per_page: 250,
-            page: 1,
-            sparkline: false,
-          },
-          timeout: 10000,
-        }
-      );
+      console.log("🌍 Fetching data from CoinGecko API...");
+      const response = await axios.get(COINGECKO_URL, {
+        params: {
+          vs_currency: "usd",
+          order: "market_cap_desc",
+          per_page: 250,
+          page: 1,
+          sparkline: false,
+        },
+        timeout: 15000,
+      });
 
-      cache = response.data;
+      // === Normalize fields for Looker ===
+      cache = response.data.map((coin) => ({
+        id: coin.id || null,
+        symbol: coin.symbol || null,
+        name: coin.name || null,
+        current_price: coin.current_price ?? null,
+        market_cap: coin.market_cap ?? null,
+        total_volume: coin.total_volume ?? null,
+        price_change_percentage_24h: coin.price_change_percentage_24h ?? null,
+      }));
+
       lastFetch = now;
       console.log(`✅ Fetched ${cache.length} coins successfully`);
     } catch (err) {
-      console.error(`❌ CoinGecko fetch failed: ${err.message}`);
-
-      if (err.response?.status === 429) {
-        console.warn("⚠️ Rate limit (429) — using stale cache if available");
-        if (cache) return cache;
-      }
-
+      console.error("❌ Error fetching from CoinGecko:", err.message);
       if (cache) {
-        console.warn("⚠️ Returning stale cache from previous fetch");
-        return cache;
+        console.log("⚠️ Returning stale cache data");
       } else {
-        console.error("🚨 No cache available — will retry later");
+        console.log("⚠️ No cache available — retry will handle it");
         throw err;
       }
     } finally {
@@ -81,11 +74,8 @@ async function fetchCoinData(force = false) {
   return fetchPromise;
 }
 
-// -----------------------------
-// API route
-// -----------------------------
+// === API route ===
 app.get("/api/prices", async (req, res) => {
-  console.log(`📡 /api/prices requested (limit=${req.query.limit || 250})`);
   try {
     const limit = parseInt(req.query.limit) || 250;
     const data = await fetchCoinData();
@@ -96,21 +86,18 @@ app.get("/api/prices", async (req, res) => {
   }
 });
 
-// -----------------------------
-// Health route for monitoring
-// -----------------------------
+// === Health check ===
 app.get("/health", (req, res) => {
+  const ageSec = ((Date.now() - lastFetch) / 1000).toFixed(0);
   res.json({
     status: "ok",
     lastFetch: new Date(lastFetch).toISOString(),
-    cacheAgeSec: ((Date.now() - lastFetch) / 1000).toFixed(0),
+    cacheAgeSec: ageSec,
     cacheReady: !!cache,
   });
 });
 
-// -----------------------------
-// Warm-Up Logic (delay + retries)
-// -----------------------------
+// === Startup warm-up ===
 async function warmUp(attempt = 1) {
   console.log(`🚀 Warm-up starting (attempt ${attempt})...`);
   try {
@@ -118,39 +105,30 @@ async function warmUp(attempt = 1) {
     console.log("🟢 Warm-up successful — cache ready");
   } catch (err) {
     console.warn(`⚠️ Warm-up failed (attempt ${attempt}): ${err.message}`);
-    if (attempt < 5) {
-      const delay = attempt * 60000; // 1, 2, 3, 4, 5 min
-      console.log(`⏳ Retrying warm-up in ${delay / 1000}s...`);
-      setTimeout(() => warmUp(attempt + 1), delay);
-    } else {
-      console.error("❌ Warm-up failed too many times — giving up for now");
-    }
+    if (attempt < 5) setTimeout(() => warmUp(attempt + 1), 60000);
   }
 }
 
-// -----------------------------
-// Keep-Alive Pinger
-// -----------------------------
+// === Keep-alive self-ping ===
 function startKeepAlive() {
-  if (SELF_URL.includes("localhost")) return; // skip locally
-  console.log(`🔄 Keep-alive pinger active — every ${KEEP_ALIVE_INTERVAL / 60000} min`);
+  const url = process.env.RENDER_EXTERNAL_URL || "https://coingecko-wrapper.onrender.com";
+  console.log("🔄 Keep-alive pinger active — every 10 min");
   setInterval(async () => {
     try {
-      await axios.get(`${SELF_URL}/health`);
-      console.log("💓 Keep-alive ping OK");
+      await axios.get(`${url}/health`);
+      console.log("💓 Keep-alive ping successful");
     } catch (err) {
-      console.warn("⚠️ Keep-alive ping failed:", err.message);
+      console.warn("💔 Keep-alive ping failed:", err.message);
     }
-  }, KEEP_ALIVE_INTERVAL);
+  }, 10 * 60 * 1000);
 }
 
-// -----------------------------
-// Server Start
-// -----------------------------
+// === Start server ===
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
-  console.log(`🌐 Public URL: ${SELF_URL}`);
+  console.log(`🌐 Public URL: ${process.env.RENDER_EXTERNAL_URL || "https://coingecko-wrapper.onrender.com"}`);
   console.log("⏳ Waiting 30s before first warm-up...");
-  setTimeout(warmUp, 30000);
+  setTimeout(() => warmUp(), 30000);
   startKeepAlive();
 });
