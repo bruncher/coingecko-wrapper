@@ -86,6 +86,32 @@ app.get("/api/prices", async (req, res) => {
   }
 });
 
+app.get("/api/compare", async (req, res) => {
+  const { coin1 = "bitcoin", coin2 = "ethereum" } = req.query;
+  try {
+    const [resp1, resp2] = await Promise.all([
+      axios.get(`https://api.coingecko.com/api/v3/coins/${coin1}/market_chart`, {
+        params: { vs_currency: "usd", days: 365 },
+      }),
+      axios.get(`https://api.coingecko.com/api/v3/coins/${coin2}/market_chart`, {
+        params: { vs_currency: "usd", days: 365 },
+      }),
+    ]);
+
+    res.json({
+      coin1,
+      coin2,
+      data: [
+        { name: coin1, prices: resp1.data.prices },
+        { name: coin2, prices: resp2.data.prices },
+      ],
+    });
+  } catch (err) {
+    console.error("❌ Compare API error:", err.message);
+    res.status(500).json({ error: "Failed to fetch comparison data" });
+  }
+});
+
 // === Health check ===
 app.get("/health", (req, res) => {
   const ageSec = ((Date.now() - lastFetch) / 1000).toFixed(0);
