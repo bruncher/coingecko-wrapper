@@ -92,44 +92,31 @@ const COMPARE_CACHE_DURATION = 60 * 60 * 1000; // 1 hour
 
 app.get("/api/compare", async (req, res) => {
   const { coin1 = "bitcoin", coin2 = "ethereum" } = req.query;
-  const key = `${coin1}-${coin2}`;
-  const now = Date.now();
-
-  if (!coin1 || !coin2) {
-    return res.status(400).json({ error: "Missing coin1 or coin2 parameter" });
-  }
-
-  // Serve cached data if available and fresh
-  if (
-    compareCache[key] &&
-    now - compareCache[key].timestamp < COMPARE_CACHE_DURATION
-  ) {
-    console.log(`🟢 Serving cached comparison for ${key}`);
-    return res.json(compareCache[key].data);
-  }
 
   try {
-    console.log(`🌍 Fetching fresh comparison for ${key}`);
-    const [resp1, resp2] = await Promise.all([
-      axios.get(`https://api.coingecko.com/api/v3/coins/${coin1}/market_chart`, {
-        params: { vs_currency: "usd", days: 365 },
-      }),
-      axios.get(`https://api.coingecko.com/api/v3/coins/${coin2}/market_chart`, {
-        params: { vs_currency: "usd", days: 365 },
-      }),
-    ]);
+    console.log(`🔍 Comparing ${coin1} vs ${coin2}`);
 
-    const data = {
+    const resp1 = await axios.get(`https://api.coingecko.com/api/v3/coins/${coin1}/market_chart`, {
+      params: { vs_currency: "usd", days: 365 },
+      timeout: 15000,
+    });
+
+    // Delay 1s to respect rate limits
+    await new Promise((r) => setTimeout(r, 1000));
+
+    const resp2 = await axios.get(`https://api.coingecko.com/api/v3/coins/${coin2}/market_chart`, {
+      params: { vs_currency: "usd", days: 365 },
+      timeout: 15000,
+    });
+
+    res.json({
       coin1,
       coin2,
       data: [
         { name: coin1, prices: resp1.data.prices },
         { name: coin2, prices: resp2.data.prices },
       ],
-    };
-
-    compareCache[key] = { data, timestamp: now };
-    res.json(data);
+    });
   } catch (err) {
     console.error("❌ Compare API error:", err.message);
     res.status(500).json({ error: "Failed to fetch comparison data" });
