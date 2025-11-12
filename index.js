@@ -91,6 +91,36 @@ const compareCache = {};
 const compareLocks = {};
 const COMPARE_CACHE_DURATION = 60 * 60 * 1000; // 1 hour
 
+// === Throttling + retry queue ===
+let lastMarketChartFetch = 0;
+const CHART_THROTTLE_MS = 3000;
+const retryQueue = [];
+
+// Throttled fetch wrapper
+async function throttledFetch(url, params) {
+  const delay = Math.max(0, CHART_THROTTLE_MS - (Date.now() - lastMarketChartFetch));
+  if (delay > 0) await new Promise(r => setTimeout(r, delay));
+  lastMarketChartFetch = Date.now();
+  return axios.get(url, { params, timeout: 20000 });
+}
+
+// Helper: retry with exponential backoff
+async function fetchWithRetry(url, params, attempt = 1) {
+try {
+  const resp = await throttledFetch(url, params);
+  return resp.data;
+  } catch (err) {
+    const status = err.response?.status;
+    if ((status === 429 || !status) && attempt < 5) {
+      const delay = 1500 * attempt + Math.random() * 500;
+      console.warn(`⚠️ Retry ${attempt}/5 for ${url} after ${delay.toFixed(0)}ms`);
+      await new Promise(r => setTimeout(r, delay));
+      return fetchWithRetry(url, params, attempt + 1);
+    }
+    throw err;
+  }
+}
+
 app.get("/api/compare", async (req, res) => {
   const { coin1 = "bitcoin", coin2 = "ethereum" } = req.query;
   const key = [coin1, coin2].sort().join("_");
@@ -111,23 +141,6 @@ app.get("/api/compare", async (req, res) => {
       return res.json(result.data);
     } catch {
       return res.status(500).json({ error: "Failed to fetch comparison data" });
-    }
-  }
-
-  // Helper: retry with exponential backoff
-  async function fetchWithRetry(url, params, attempt = 1) {
-    try {
-      const resp = await axios.get(url, { params, timeout: 20000 });
-      return resp.data;
-    } catch (err) {
-      const status = err.response?.status;
-      if ((status === 429 || !status) && attempt < 5) {
-        const delay = 1500 * attempt + Math.random() * 500;
-        console.warn(`⚠️ Retry ${attempt}/5 for ${url} after ${delay.toFixed(0)}ms`);
-        await new Promise(r => setTimeout(r, delay));
-        return fetchWithRetry(url, params, attempt + 1);
-      }
-      throw err;
     }
   }
 
@@ -182,9 +195,50 @@ app.get("/api/compare", async (req, res) => {
     const result = await compareLocks[key];
     res.json(result.data);
   } catch {
-    res.status(500).json({ error: "Failed to fetch comparison data" });
-  }
+  console.warn(`⚠️ Compare request failed for ${coin1}_${coin2}, enqueuing background retry`);
+  retryQueue.push({ coin1, coin2, attempt: 1 });
+  const cached = compareCache[key];
+  res.status(200).json(
+    cached
+      ? { ...cached.data, warning: "Served stale data after error" }
+      : { coin1, coin2, data: [], warning: "Data temporarily unavailable — retrying in background" }
+  );
+}
 });
+
+// === Background retry worker ===
+setInterval(async () => {
+  if (retryQueue.length === 0) return;
+  const task = retryQueue.shift();
+  const { coin1, coin2, attempt } = task;
+  const key = [coin1, coin2].sort().join("_");
+  console.log(`🔁 Background retry for ${key} (attempt ${attempt})`);
+
+  try {
+    const params = { vs_currency: "usd", days: 365 };
+    const url1 = `https://api.coingecko.com/api/v3/coins/${coin1}/market_chart`;
+    const url2 = `https://api.coingecko.com/api/v3/coins/${coin2}/market_chart`;
+    const [data1, data2] = await Promise.all([
+      fetchWithRetry(url1, params),
+      fetchWithRetry(url2, params)
+    ]);
+    compareCache[key] = {
+      timestamp: Date.now(),
+      data: {
+        coin1,
+        coin2,
+        data: [
+          { name: coin1, prices: data1.prices || [] },
+          { name: coin2, prices: data2.prices || [] },
+        ]
+      }
+    };
+    console.log(`✅ Background retry successful for ${key}`);
+  } catch (err) {
+    console.warn(`⚠️ Background retry failed for ${key}: ${err.message}`);
+    if (attempt < 5) retryQueue.push({ coin1, coin2, attempt: attempt + 1 });
+  }
+}, 60 * 1000); // every 60 seconds
 
 // === Health check ===
 app.get("/health", (req, res) => {
@@ -208,6 +262,15 @@ async function warmUp(attempt = 1) {
     if (attempt < 5) setTimeout(() => warmUp(attempt + 1), 60000);
   }
 }
+
+// === Prewarm top compare pairs hourly ===
+const topPairs = [["bitcoin", "ethereum"], ["solana", "cardano"], ["dogecoin", "shiba-inu"]];
+setInterval(() => {
+  console.log("🔥 Prewarming top compare pairs...");
+  topPairs.forEach(([a, b]) =>
+    retryQueue.push({ coin1: a, coin2: b, attempt: 1 })
+  );
+}, 60 * 60 * 1000);
 
 // === Keep-alive self-ping ===
 function startKeepAlive() {
