@@ -92,17 +92,25 @@ const COMPARE_CACHE_DURATION = 60 * 60 * 1000; // 1 hour
 
 app.get("/api/compare", async (req, res) => {
   const { coin1 = "bitcoin", coin2 = "ethereum" } = req.query;
+  const key = [coin1, coin2].sort().join("_"); // makes btc/eth = eth/btc
   console.log(`🔍 Comparing ${coin1} vs ${coin2}`);
+
+  // Return from cache if recent
+  const cached = compareCache[key];
+  if (cached && Date.now() - cached.timestamp < COMPARE_CACHE_DURATION) {
+    console.log(`🟢 Served ${key} from cache`);
+    return res.json(cached.data);
+  }
 
   async function fetchWithRetry(url, params, attempt = 1) {
     try {
-      const resp = await axios.get(url, { params, timeout: 15000 });
+      const resp = await axios.get(url, { params, timeout: 20000 });
       return resp.data;
     } catch (err) {
       const status = err.response?.status;
-      if (status === 429 && attempt < 3) {
-        const delay = 500 * 2 ** (attempt - 1);
-        console.warn(`⏳ 429 from CoinGecko, retrying in ${delay} ms (attempt ${attempt})`);
+      if (status === 429 && attempt < 5) {
+        const delay = 1000 * (Math.random() + attempt); // 1–5s jittered
+        console.warn(`⏳ 429 from CoinGecko, retrying in ${delay.toFixed(0)} ms (attempt ${attempt})`);
         await new Promise(r => setTimeout(r, delay));
         return fetchWithRetry(url, params, attempt + 1);
       }
@@ -115,18 +123,21 @@ app.get("/api/compare", async (req, res) => {
     const url2 = `https://api.coingecko.com/api/v3/coins/${coin2}/market_chart`;
 
     const data1 = await fetchWithRetry(url1, { vs_currency: "usd", days: 365 });
-    // 1 s delay between calls to reduce 429 risk
-    await new Promise(r => setTimeout(r, 1000));
+    await new Promise(r => setTimeout(r, 1500)); // small gap between requests
     const data2 = await fetchWithRetry(url2, { vs_currency: "usd", days: 365 });
 
-    res.json({
+    const data = {
       coin1,
       coin2,
       data: [
         { name: coin1, prices: data1.prices },
         { name: coin2, prices: data2.prices },
       ],
-    });
+    };
+
+    compareCache[key] = { timestamp: Date.now(), data };
+    console.log(`✅ Cached comparison for ${key}`);
+    res.json(data);
   } catch (err) {
     console.error("❌ Compare API error:", err.message);
     res.status(500).json({ error: "Failed to fetch comparison data" });
