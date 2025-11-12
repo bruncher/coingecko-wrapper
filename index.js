@@ -92,29 +92,39 @@ const COMPARE_CACHE_DURATION = 60 * 60 * 1000; // 1 hour
 
 app.get("/api/compare", async (req, res) => {
   const { coin1 = "bitcoin", coin2 = "ethereum" } = req.query;
+  console.log(`🔍 Comparing ${coin1} vs ${coin2}`);
+
+  async function fetchWithRetry(url, params, attempt = 1) {
+    try {
+      const resp = await axios.get(url, { params, timeout: 15000 });
+      return resp.data;
+    } catch (err) {
+      const status = err.response?.status;
+      if (status === 429 && attempt < 3) {
+        const delay = 500 * 2 ** (attempt - 1);
+        console.warn(`⏳ 429 from CoinGecko, retrying in ${delay} ms (attempt ${attempt})`);
+        await new Promise(r => setTimeout(r, delay));
+        return fetchWithRetry(url, params, attempt + 1);
+      }
+      throw err;
+    }
+  }
 
   try {
-    console.log(`🔍 Comparing ${coin1} vs ${coin2}`);
+    const url1 = `https://api.coingecko.com/api/v3/coins/${coin1}/market_chart`;
+    const url2 = `https://api.coingecko.com/api/v3/coins/${coin2}/market_chart`;
 
-    const resp1 = await axios.get(`https://api.coingecko.com/api/v3/coins/${coin1}/market_chart`, {
-      params: { vs_currency: "usd", days: 365 },
-      timeout: 15000,
-    });
-
-    // Delay 1s to respect rate limits
-    await new Promise((r) => setTimeout(r, 1000));
-
-    const resp2 = await axios.get(`https://api.coingecko.com/api/v3/coins/${coin2}/market_chart`, {
-      params: { vs_currency: "usd", days: 365 },
-      timeout: 15000,
-    });
+    const data1 = await fetchWithRetry(url1, { vs_currency: "usd", days: 365 });
+    // 1 s delay between calls to reduce 429 risk
+    await new Promise(r => setTimeout(r, 1000));
+    const data2 = await fetchWithRetry(url2, { vs_currency: "usd", days: 365 });
 
     res.json({
       coin1,
       coin2,
       data: [
-        { name: coin1, prices: resp1.data.prices },
-        { name: coin2, prices: resp2.data.prices },
+        { name: coin1, prices: data1.prices },
+        { name: coin2, prices: data2.prices },
       ],
     });
   } catch (err) {
