@@ -137,11 +137,16 @@ app.get("/api/compare", async (req, res) => {
       const url2 = `https://api.coingecko.com/api/v3/coins/${coin2}/market_chart`;
       const params = { vs_currency: "usd", days: 365 };
 
-      // Fetch sequentially to reduce rate-limit risk
+      // Fetch sequentially to reduce rate-limit risk (with random gap)
       const data1 = await fetchWithRetry(url1, params);
-      await new Promise(r => setTimeout(r, 1500));
+      
+      // Add 1.5–3.5s randomized delay before second request
+      const randomDelay = 1500 + Math.random() * 2000;
+      console.log(`⏳ Waiting ${randomDelay.toFixed(0)}ms before second coin request...`);
+      await new Promise(r => setTimeout(r, randomDelay));
+      
       const data2 = await fetchWithRetry(url2, params);
-
+      
       const result = {
         coin1,
         coin2,
