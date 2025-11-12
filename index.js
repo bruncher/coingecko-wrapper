@@ -88,29 +88,42 @@ app.get("/api/prices", async (req, res) => {
 
 // === Compare cache ===
 const compareCache = {};
+const compareLocks = {};
 const COMPARE_CACHE_DURATION = 60 * 60 * 1000; // 1 hour
 
 app.get("/api/compare", async (req, res) => {
   const { coin1 = "bitcoin", coin2 = "ethereum" } = req.query;
-  const key = [coin1, coin2].sort().join("_"); // makes btc/eth = eth/btc
-  console.log(`🔍 Comparing ${coin1} vs ${coin2}`);
+  const key = [coin1, coin2].sort().join("_");
+  console.log(`🔍 Compare request: ${coin1} vs ${coin2}`);
 
-  // Return from cache if recent
+  // Serve from cache if still fresh
   const cached = compareCache[key];
   if (cached && Date.now() - cached.timestamp < COMPARE_CACHE_DURATION) {
     console.log(`🟢 Served ${key} from cache`);
     return res.json(cached.data);
   }
 
+  // Prevent duplicate concurrent fetches
+  if (compareLocks[key]) {
+    console.log(`⏳ Waiting for existing fetch for ${key}`);
+    try {
+      const result = await compareLocks[key];
+      return res.json(result.data);
+    } catch {
+      return res.status(500).json({ error: "Failed to fetch comparison data" });
+    }
+  }
+
+  // Helper: retry with exponential backoff for 429 or network errors
   async function fetchWithRetry(url, params, attempt = 1) {
     try {
       const resp = await axios.get(url, { params, timeout: 20000 });
       return resp.data;
     } catch (err) {
       const status = err.response?.status;
-      if (status === 429 && attempt < 5) {
-        const delay = 1000 * (Math.random() + attempt); // 1–5s jittered
-        console.warn(`⏳ 429 from CoinGecko, retrying in ${delay.toFixed(0)} ms (attempt ${attempt})`);
+      if ((status === 429 || !status) && attempt < 5) {
+        const delay = 1500 * attempt + Math.random() * 500;
+        console.warn(`⚠️ Retry ${attempt}/5 for ${url} after ${delay.toFixed(0)}ms`);
         await new Promise(r => setTimeout(r, delay));
         return fetchWithRetry(url, params, attempt + 1);
       }
@@ -118,28 +131,41 @@ app.get("/api/compare", async (req, res) => {
     }
   }
 
+  compareLocks[key] = (async () => {
+    try {
+      const url1 = `https://api.coingecko.com/api/v3/coins/${coin1}/market_chart`;
+      const url2 = `https://api.coingecko.com/api/v3/coins/${coin2}/market_chart`;
+      const params = { vs_currency: "usd", days: 365 };
+
+      // Fetch sequentially to reduce rate-limit risk
+      const data1 = await fetchWithRetry(url1, params);
+      await new Promise(r => setTimeout(r, 1500));
+      const data2 = await fetchWithRetry(url2, params);
+
+      const result = {
+        coin1,
+        coin2,
+        data: [
+          { name: coin1, prices: data1.prices || [] },
+          { name: coin2, prices: data2.prices || [] },
+        ],
+      };
+
+      compareCache[key] = { timestamp: Date.now(), data: result };
+      console.log(`✅ Cached compare ${key}`);
+      return { data: result };
+    } catch (err) {
+      console.error(`❌ Compare failed for ${key}:`, err.message);
+      throw err;
+    } finally {
+      delete compareLocks[key];
+    }
+  })();
+
   try {
-    const url1 = `https://api.coingecko.com/api/v3/coins/${coin1}/market_chart`;
-    const url2 = `https://api.coingecko.com/api/v3/coins/${coin2}/market_chart`;
-
-    const data1 = await fetchWithRetry(url1, { vs_currency: "usd", days: 365 });
-    await new Promise(r => setTimeout(r, 1500)); // small gap between requests
-    const data2 = await fetchWithRetry(url2, { vs_currency: "usd", days: 365 });
-
-    const data = {
-      coin1,
-      coin2,
-      data: [
-        { name: coin1, prices: data1.prices },
-        { name: coin2, prices: data2.prices },
-      ],
-    };
-
-    compareCache[key] = { timestamp: Date.now(), data };
-    console.log(`✅ Cached comparison for ${key}`);
-    res.json(data);
-  } catch (err) {
-    console.error("❌ Compare API error:", err.message);
+    const result = await compareLocks[key];
+    res.json(result.data);
+  } catch {
     res.status(500).json({ error: "Failed to fetch comparison data" });
   }
 });
