@@ -114,7 +114,7 @@ app.get("/api/compare", async (req, res) => {
     }
   }
 
-  // Helper: retry with exponential backoff for 429 or network errors
+  // Helper: retry with exponential backoff
   async function fetchWithRetry(url, params, attempt = 1) {
     try {
       const resp = await axios.get(url, { params, timeout: 20000 });
@@ -132,39 +132,50 @@ app.get("/api/compare", async (req, res) => {
   }
 
   compareLocks[key] = (async () => {
-    try {
-      const url1 = `https://api.coingecko.com/api/v3/coins/${coin1}/market_chart`;
-      const url2 = `https://api.coingecko.com/api/v3/coins/${coin2}/market_chart`;
-      const params = { vs_currency: "usd", days: 365 };
+    const url1 = `https://api.coingecko.com/api/v3/coins/${coin1}/market_chart`;
+    const url2 = `https://api.coingecko.com/api/v3/coins/${coin2}/market_chart`;
+    const params = { vs_currency: "usd", days: 365 };
 
-      // Fetch sequentially to reduce rate-limit risk (with random gap)
-      const data1 = await fetchWithRetry(url1, params);
-      
-      // Add 1.5–3.5s randomized delay before second request
+    let data1 = null;
+    let data2 = null;
+    let warning = null;
+
+    try {
+      // Fetch first coin
+      data1 = await fetchWithRetry(url1, params);
+
+      // Randomized delay before second request
       const randomDelay = 1500 + Math.random() * 2000;
       console.log(`⏳ Waiting ${randomDelay.toFixed(0)}ms before second coin request...`);
       await new Promise(r => setTimeout(r, randomDelay));
-      
-      const data2 = await fetchWithRetry(url2, params);
-      
-      const result = {
-        coin1,
-        coin2,
-        data: [
-          { name: coin1, prices: data1.prices || [] },
-          { name: coin2, prices: data2.prices || [] },
-        ],
-      };
 
-      compareCache[key] = { timestamp: Date.now(), data: result };
-      console.log(`✅ Cached compare ${key}`);
-      return { data: result };
+      // Fetch second coin
+      data2 = await fetchWithRetry(url2, params);
     } catch (err) {
-      console.error(`❌ Compare failed for ${key}:`, err.message);
-      throw err;
+      console.error(`⚠️ Partial failure fetching ${coin1} vs ${coin2}:`, err.message);
+      warning = `Partial data — ${!data1 ? coin1 : coin2} failed to fetch`;
     } finally {
       delete compareLocks[key];
     }
+
+    if (!data1 && !data2) {
+      console.error(`❌ Both coin fetches failed for ${key}`);
+      throw new Error("Both coin fetches failed");
+    }
+
+    const result = {
+      coin1,
+      coin2,
+      data: [
+        ...(data1 ? [{ name: coin1, prices: data1.prices || [] }] : []),
+        ...(data2 ? [{ name: coin2, prices: data2.prices || [] }] : []),
+      ],
+      ...(warning ? { warning } : {}),
+    };
+
+    compareCache[key] = { timestamp: Date.now(), data: result };
+    console.log(`✅ Cached compare ${key}${warning ? " (partial)" : ""} — ${data1?.prices?.length || 0}/${data2?.prices?.length || 0} points`);
+    return { data: result };
   })();
 
   try {
