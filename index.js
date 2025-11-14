@@ -114,10 +114,10 @@ async function fetchWithRetry(url, params, attempt = 1) {
     const isRateLimit = status === 429;
     const isNetwork = !status; // timeouts, DNS, CG outages
 
-    if ((isRateLimit || isNetwork) && attempt < 20) {
+    if ((isRateLimit || isNetwork) && attempt < 30) {
       const delay = Math.min(500 * attempt, 8000) + Math.random() * 300;
       console.warn(
-        `⚠️ Retry ${attempt}/20 for ${url} after ${delay.toFixed(0)}ms (${status || "network error"})`
+        `⚠️ Retry ${attempt}/30 for ${url} after ${delay.toFixed(0)}ms (${status || "network error"})`
       );
       await new Promise(r => setTimeout(r, delay));
       return fetchWithRetry(url, params, attempt + 1);
@@ -263,7 +263,7 @@ setInterval(async () => {
   const { coin1, coin2, attempt } = task;
   const key = [coin1, coin2].sort().join("_");
 
-  console.log(`🔁 Background retry for ${key} (attempt ${attempt}/20)`);
+  console.log(`🔁 Background retry for ${key} (attempt ${attempt}/30)`);
 
   const params = { vs_currency: "usd", days: 365, interval: "daily" };
   const url1 = `https://api.coingecko.com/api/v3/coins/${coin1}/market_chart`;
@@ -297,14 +297,14 @@ setInterval(async () => {
   } catch (err) {
     console.warn(`⚠️ Background retry failed for ${key}: ${err.message}`);
 
-    if (attempt < 20) {
+    if (attempt < 30) {
       retryQueue.push({ coin1, coin2, attempt: attempt + 1 });
-      console.log(`🔁 Re-queued ${key} (attempt ${attempt + 1}/20)`);
+      console.log(`🔁 Re-queued ${key} (attempt ${attempt + 1}/30)`);
     } else {
-      console.error(`❌ Giving up on ${key} after 20 failed attempts`);
+      console.error(`❌ Giving up on ${key} after 30 failed attempts`);
     }
   }
-}, 60 * 1000);
+}, 15 * 1000);
 
 // === Health check ===
 app.get("/health", (req, res) => {
@@ -365,7 +365,7 @@ async function preloadAllCharts() {
   console.log("🔥 Starting chart preloads...");
   for (const coin of PRELOAD_COINS) {
     await preloadChart(coin);
-    await new Promise(r => setTimeout(r, 1500)); // rate-limit safe
+    await new Promise(r => setTimeout(r, 2500)); // rate-limit safe
   }
   console.log("🟢 Chart preloads completed");
 }
