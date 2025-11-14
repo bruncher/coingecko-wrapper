@@ -272,6 +272,38 @@ setInterval(() => {
   );
 }, 60 * 60 * 1000);
 
+// === Preload full chart data for key coins ===
+const PRELOAD_COINS = [
+  "bitcoin", "ethereum", "ripple", "binancecoin",
+  "solana", "tron", "dogecoin", "avalanche-2",
+  "uniswap", "cronos", "aave", "matic-network"
+];
+
+async function preloadChart(coinId) {
+  console.log(`🔄 Preloading chart for ${coinId}...`);
+  const url = `https://api.coingecko.com/api/v3/coins/${coinId}/market_chart`;
+
+  try {
+    const data = await fetchWithRetry(url, { vs_currency: "usd", days: 365 });
+    compareCache[`preload_${coinId}`] = {
+      timestamp: Date.now(),
+      data: { name: coinId, prices: data.prices }
+    };
+    console.log(`✅ Preloaded chart for ${coinId} (${data.prices.length} points)`);
+  } catch (err) {
+    console.warn(`⚠️ Failed to preload ${coinId}: ${err.message}`);
+  }
+}
+
+async function preloadAllCharts() {
+  console.log("🔥 Starting chart preloads...");
+  for (const coin of PRELOAD_COINS) {
+    await preloadChart(coin);
+    await new Promise(r => setTimeout(r, 1500)); // rate-limit safe
+  }
+  console.log("🟢 Chart preloads completed");
+}
+
 // === Keep-alive self-ping ===
 function startKeepAlive() {
   const url = process.env.RENDER_EXTERNAL_URL || "https://coingecko-wrapper.onrender.com";
@@ -292,6 +324,11 @@ app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
   console.log(`🌐 Public URL: ${process.env.RENDER_EXTERNAL_URL || "https://coingecko-wrapper.onrender.com"}`);
   console.log("⏳ Waiting 30s before first warm-up...");
-  setTimeout(() => warmUp(), 30000);
+  setTimeout(async () => {
+    await warmUp();
+    console.log("📈 Starting chart preloads in 10s...");
+    setTimeout(preloadAllCharts, 10000);
+  }, 30000);
+
   startKeepAlive();
 });
