@@ -147,7 +147,7 @@ app.get("/api/compare", async (req, res) => {
   compareLocks[key] = (async () => {
     const url1 = `https://api.coingecko.com/api/v3/coins/${coin1}/market_chart`;
     const url2 = `https://api.coingecko.com/api/v3/coins/${coin2}/market_chart`;
-    const params = { vs_currency: "usd", days: 365 };
+    const params = { vs_currency: "usd", days: 365, interval: "daily" };
 
     let data1 = null;
     let data2 = null;
@@ -215,7 +215,7 @@ setInterval(async () => {
   console.log(`🔁 Background retry for ${key} (attempt ${attempt})`);
 
   try {
-    const params = { vs_currency: "usd", days: 365 };
+    const params = { vs_currency: "usd", days: 365, interval: "daily" };
     const url1 = `https://api.coingecko.com/api/v3/coins/${coin1}/market_chart`;
     const url2 = `https://api.coingecko.com/api/v3/coins/${coin2}/market_chart`;
     const [data1, data2] = await Promise.all([
@@ -284,7 +284,7 @@ async function preloadChart(coinId) {
   const url = `https://api.coingecko.com/api/v3/coins/${coinId}/market_chart`;
 
   try {
-    const data = await fetchWithRetry(url, { vs_currency: "usd", days: 365 });
+    const data = await fetchWithRetry(url, { vs_currency: "usd", days: 365, interval: "daily" });
     compareCache[`preload_${coinId}`] = {
       timestamp: Date.now(),
       data: { name: coinId, prices: data.prices }
