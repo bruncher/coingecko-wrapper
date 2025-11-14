@@ -104,19 +104,25 @@ async function throttledFetch(url, params) {
   return axios.get(url, { params, timeout: 20000 });
 }
 
-// Helper: retry with exponential backoff
+// === Improved retry logic (20 retries, fast failures, incremental backoff) ===
 async function fetchWithRetry(url, params, attempt = 1) {
-try {
-  const resp = await throttledFetch(url, params);
-  return resp.data;
+  try {
+    const resp = await throttledFetch(url, params);
+    return resp.data;
   } catch (err) {
     const status = err.response?.status;
-    if ((status === 429 || !status) && attempt < 5) {
-      const delay = 1500 * attempt + Math.random() * 500;
-      console.warn(`⚠️ Retry ${attempt}/5 for ${url} after ${delay.toFixed(0)}ms`);
+    const isRateLimit = status === 429;
+    const isNetwork = !status; // timeouts, DNS, CG outages
+
+    if ((isRateLimit || isNetwork) && attempt < 20) {
+      const delay = Math.min(500 * attempt, 8000) + Math.random() * 300;
+      console.warn(
+        `⚠️ Retry ${attempt}/20 for ${url} after ${delay.toFixed(0)}ms (${status || "network error"})`
+      );
       await new Promise(r => setTimeout(r, delay));
       return fetchWithRetry(url, params, attempt + 1);
     }
+
     throw err;
   }
 }
@@ -245,39 +251,60 @@ app.get("/api/compare", async (req, res) => {
   }
 });
 
-// === Background retry worker ===
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// === Improved background retry worker (20 attempts, alignment, no dead coins) ===
 setInterval(async () => {
   if (retryQueue.length === 0) return;
+
   const task = retryQueue.shift();
   const { coin1, coin2, attempt } = task;
   const key = [coin1, coin2].sort().join("_");
-  console.log(`🔁 Background retry for ${key} (attempt ${attempt})`);
+
+  console.log(`🔁 Background retry for ${key} (attempt ${attempt}/20)`);
+
+  const params = { vs_currency: "usd", days: 365, interval: "daily" };
+  const url1 = `https://api.coingecko.com/api/v3/coins/${coin1}/market_chart`;
+  const url2 = `https://api.coingecko.com/api/v3/coins/${coin2}/market_chart`;
 
   try {
-    const params = { vs_currency: "usd", days: 365, interval: "daily" };
-    const url1 = `https://api.coingecko.com/api/v3/coins/${coin1}/market_chart`;
-    const url2 = `https://api.coingecko.com/api/v3/coins/${coin2}/market_chart`;
     const [data1, data2] = await Promise.all([
       fetchWithRetry(url1, params),
       fetchWithRetry(url2, params)
     ]);
+
+    // Align the charts so Looker never breaks
+    const s1 = data1?.prices || [];
+    const s2 = data2?.prices || [];
+    const [aligned1, aligned2] = alignTimeframes(s1, s2);
+
     compareCache[key] = {
       timestamp: Date.now(),
       data: {
         coin1,
         coin2,
         data: [
-          { name: coin1, prices: data1.prices || [] },
-          { name: coin2, prices: data2.prices || [] },
+          { name: coin1, prices: aligned1 },
+          { name: coin2, prices: aligned2 }
         ]
       }
     };
-    console.log(`✅ Background retry successful for ${key}`);
+
+    console.log(`✅ Background retry SUCCESS for ${key}`);
+
   } catch (err) {
     console.warn(`⚠️ Background retry failed for ${key}: ${err.message}`);
-    if (attempt < 5) retryQueue.push({ coin1, coin2, attempt: attempt + 1 });
+
+    if (attempt < 20) {
+      retryQueue.push({ coin1, coin2, attempt: attempt + 1 });
+      console.log(`🔁 Re-queued ${key} (attempt ${attempt + 1}/20)`);
+    } else {
+      console.error(`❌ Giving up on ${key} after 20 failed attempts`);
+    }
   }
-}, 60 * 1000); // every 60 seconds
+}, 60 * 1000);
 
 // === Health check ===
 app.get("/health", (req, res) => {
