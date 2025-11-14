@@ -89,7 +89,7 @@ app.get("/api/prices", async (req, res) => {
 // === Compare cache ===
 const compareCache = {};
 const compareLocks = {};
-const COMPARE_CACHE_DURATION = 60 * 60 * 1000; // 1 hour
+const COMPARE_CACHE_DURATION = 60 * 1000; // 60 sec
 
 // === Throttling + retry queue ===
 let lastMarketChartFetch = 0;
@@ -119,6 +119,33 @@ try {
     }
     throw err;
   }
+}
+
+function safePlaceholder(coin1, coin2) {
+  return {
+    coin1,
+    coin2,
+    data: [
+      { name: coin1, prices: [] },
+      { name: coin2, prices: [] }
+    ],
+    warning: "No data available — using placeholder"
+  };
+}
+
+function alignTimeframes(series1, series2) {
+  if (!series1 || !series2) return [series1, series2];
+
+  const map1 = new Map(series1.map(([t, v]) => [t, v]));
+  const map2 = new Map(series2.map(([t, v]) => [t, v]));
+
+  // Use only timestamps that appear in *both* series
+  const commonTimestamps = [...map1.keys()].filter(t => map2.has(t));
+
+  const aligned1 = commonTimestamps.map(t => [t, map1.get(t)]);
+  const aligned2 = commonTimestamps.map(t => [t, map2.get(t)]);
+
+  return [aligned1, aligned2];
 }
 
 app.get("/api/compare", async (req, res) => {
@@ -176,12 +203,20 @@ app.get("/api/compare", async (req, res) => {
       throw new Error("Both coin fetches failed");
     }
 
+    // Align timeframes so Looker never sees mismatched timestamps
+    let aligned1 = data1?.prices || [];
+    let aligned2 = data2?.prices || [];
+    
+    if (data1 && data2) {
+      [aligned1, aligned2] = alignTimeframes(aligned1, aligned2);
+    }
+    
     const result = {
       coin1,
       coin2,
       data: [
-        ...(data1 ? [{ name: coin1, prices: data1.prices || [] }] : []),
-        ...(data2 ? [{ name: coin2, prices: data2.prices || [] }] : []),
+        ...(data1 ? [{ name: coin1, prices: aligned1 }] : []),
+        ...(data2 ? [{ name: coin2, prices: aligned2 }] : []),
       ],
       ...(warning ? { warning } : {}),
     };
@@ -195,15 +230,19 @@ app.get("/api/compare", async (req, res) => {
     const result = await compareLocks[key];
     res.json(result.data);
   } catch {
-  console.warn(`⚠️ Compare request failed for ${coin1}_${coin2}, enqueuing background retry`);
-  retryQueue.push({ coin1, coin2, attempt: 1 });
-  const cached = compareCache[key];
-  res.status(200).json(
-    cached
-      ? { ...cached.data, warning: "Served stale data after error" }
-      : { coin1, coin2, data: [], warning: "Data temporarily unavailable — retrying in background" }
-  );
-}
+    console.warn(`⚠️ Compare request failed for ${coin1}_${coin2}, enqueuing background retry`);
+    retryQueue.push({ coin1, coin2, attempt: 1 });
+    const cached = compareCache[key];
+    if (cached) {
+      return res.status(200).json({
+        ...cached.data,
+        warning: "Served stale cached data due to error"
+      });
+    }
+  
+    // No cache? Return placeholder instead of broken structure
+    return res.status(200).json(safePlaceholder(coin1, coin2));
+  }
 });
 
 // === Background retry worker ===
