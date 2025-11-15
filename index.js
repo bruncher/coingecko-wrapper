@@ -123,6 +123,17 @@ async function fetchWithRetry(url, params, attempt = 1) {
       return fetchWithRetry(url, params, attempt + 1);
     }
 
+    // 404 fallback — missing 365 days → try days=max
+    if (err.response?.status === 404 && params.days === 365) {
+      console.warn(`⚠️ 404 for ${url} — fallback to days=max`);
+      try {
+        const resp = await throttledFetch(url, { ...params, days: "max" });
+        return resp.data;
+      } catch (e) {
+        console.warn(`❌ Fallback failed for ${url}: ${e.message}`);
+      }
+    }
+
     throw err;
   }
 }
@@ -187,21 +198,38 @@ app.get("/api/compare", async (req, res) => {
     let warning = null;
 
     try {
-      // Fetch first coin
-      data1 = await fetchWithRetry(url1, params);
-
-      // Randomized delay before second request
+      // === Fetch coin1 ===
+      try {
+        data1 = await fetchWithRetry(url1, params);
+      } catch (err) {
+        const status = err.response?.status;
+        if (status === 404) {
+          console.warn(`⚠️ 404 for ${coin1} — retrying with days=max`);
+          try {
+            data1 = await axios.get(url1, { params: { ...params, days: "max" }}).then(r => r.data);
+          } catch {}
+        }
+      }
+    
+      // Randomized delay between coins
       const randomDelay = 1500 + Math.random() * 2000;
       console.log(`⏳ Waiting ${randomDelay.toFixed(0)}ms before second coin request...`);
       await new Promise(r => setTimeout(r, randomDelay));
-
-      // Fetch second coin
-      data2 = await fetchWithRetry(url2, params);
+    
+      // === Fetch coin2 (this was broken before) ===
+      try {
+        data2 = await fetchWithRetry(url2, params);
+      } catch (err) {
+        const status = err.response?.status;
+        if (status === 404) {
+          console.warn(`⚠️ 404 for ${coin2} — retrying with days=max`);
+          try {
+            data2 = await axios.get(url2, { params: { ...params, days: "max" }}).then(r => r.data);
+          } catch {}
+        }
+      }
     } catch (err) {
-      console.error(`⚠️ Partial failure fetching ${coin1} vs ${coin2}:`, err.message);
-      warning = `Partial data — ${!data1 ? coin1 : coin2} failed to fetch`;
-    } finally {
-      delete compareLocks[key];
+      console.error("❌ Unexpected compare error:", err.message);
     }
 
     if (!data1 && !data2) {
@@ -342,22 +370,42 @@ setInterval(() => {
 const PRELOAD_COINS = [
   "bitcoin", "ethereum", "ripple", "binancecoin",
   "solana", "tron", "dogecoin", "avalanche-2",
-  "uniswap", "cronos", "aave", "matic-network"
+  "uniswap", "crypto-com-chain", "aave", "matic-network"
 ];
 
 async function preloadChart(coinId) {
   console.log(`🔄 Preloading chart for ${coinId}...`);
   const url = `https://api.coingecko.com/api/v3/coins/${coinId}/market_chart`;
+  const params = { vs_currency: "usd", days: 365, interval: "daily" };
 
   try {
-    const data = await fetchWithRetry(url, { vs_currency: "usd", days: 365, interval: "daily" });
+    const data = await fetchWithRetry(url, params);
     compareCache[`preload_${coinId}`] = {
       timestamp: Date.now(),
       data: { name: coinId, prices: data.prices }
     };
     console.log(`✅ Preloaded chart for ${coinId} (${data.prices.length} points)`);
+    return data;
   } catch (err) {
+    const status = err.response?.status;
     console.warn(`⚠️ Failed to preload ${coinId}: ${err.message}`);
+
+    // === 404 fallback: use "days=max" ===
+    if (status === 404) {
+      console.warn(`⚠️ 404 for ${coinId} — retrying with days=max`);
+      const fallbackParams = { ...params, days: "max" };
+      try {
+        const data = await axios.get(url, { params: fallbackParams }).then(r => r.data);
+        compareCache[`preload_${coinId}`] = {
+          timestamp: Date.now(),
+          data: { name: coinId, prices: data.prices }
+        };
+        console.log(`🟡 Fallback succeeded for ${coinId} (${data.prices.length} points)`);
+        return data;
+      } catch (e) {
+        console.warn(`❌ Fallback also failed for ${coinId}: ${e.message}`);
+      }
+    }
   }
 }
 
