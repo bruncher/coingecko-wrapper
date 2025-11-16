@@ -279,6 +279,39 @@ app.get("/api/compare", async (req, res) => {
   }
 });
 
+// === Looker Studio flat table version ===
+app.get("/api/compare_flat", async (req, res) => {
+  try {
+    const { coin1 = "bitcoin", coin2 = "ethereum" } = req.query;
+
+    // Call the existing compare endpoint internally
+    const url = `${req.protocol}://${req.get("host")}/api/compare`;
+    const response = await axios.get(url, { params: { coin1, coin2 } });
+
+    const raw = response.data.data; // array of: { name, prices }
+
+    const flattened = [];
+
+    for (const coin of raw) {
+      const name = coin.name;
+      for (const [timestamp, price] of coin.prices) {
+        flattened.push({
+          coin: name,
+          timestamp,
+          price
+        });
+      }
+    }
+
+    return res.json(flattened);
+  } catch (err) {
+    console.error("❌ compare_flat error:", err.message);
+    return res.status(500).json({
+      error: "Failed to build flat comparison table"
+    });
+  }
+});
+
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
