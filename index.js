@@ -336,9 +336,12 @@ app.get("/api/compare_flat_all", async (req, res) => {
       const prices = cached.data.prices;
 
       for (const [timestamp, price] of prices) {
+        const d = new Date(timestamp);
+        if (isNaN(d.getTime())) continue; // remove invalid timestamps
+      
         results.push({
           coin: name,
-          timestamp: new Date(timestamp).toISOString(),  // Looker-friendly
+          timestamp: d.toISOString(),
           price
         });
       }
@@ -461,9 +464,19 @@ async function preloadChart(coinId) {
 
   try {
     const data = await fetchWithRetry(url, params);
+    // Normalize + filter CoinGecko price points for Looker
+    const cleanPrices = (data.prices || [])
+      .filter(p => Array.isArray(p) && p.length === 2)     // ensure [timestamp, price]
+      .map(([ts, price]) => {
+        const d = new Date(ts);
+        if (isNaN(d.getTime())) return null;               // skip invalid timestamps
+        return [ d.toISOString(), price ];                 // convert to ISO string
+      })
+      .filter(Boolean);                                     // drop null rows
+    
     compareCache[`preload_${coinId}`] = {
       timestamp: Date.now(),
-      data: { name: coinId, prices: data.prices }
+      data: { name: coinId, prices: cleanPrices }
     };
     console.log(`✅ Preloaded chart for ${coinId} (${data.prices.length} points)`);
     return data;
@@ -477,9 +490,19 @@ async function preloadChart(coinId) {
       const fallbackParams = { ...params, days: "max" };
       try {
         const data = await axios.get(url, { params: fallbackParams }).then(r => r.data);
+        // Normalize + filter CoinGecko price points for Looker
+        const cleanPrices = (data.prices || [])
+          .filter(p => Array.isArray(p) && p.length === 2)     // ensure [timestamp, price]
+          .map(([ts, price]) => {
+            const d = new Date(ts);
+            if (isNaN(d.getTime())) return null;               // skip invalid timestamps
+            return [ d.toISOString(), price ];                 // convert to ISO string
+          })
+          .filter(Boolean);                                     // drop null rows
+        
         compareCache[`preload_${coinId}`] = {
           timestamp: Date.now(),
-          data: { name: coinId, prices: data.prices }
+          data: { name: coinId, prices: cleanPrices }
         };
         console.log(`🟡 Fallback succeeded for ${coinId} (${data.prices.length} points)`);
         return data;
