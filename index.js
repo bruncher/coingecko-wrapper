@@ -291,20 +291,41 @@ app.get("/api/compare_flat", async (req, res) => {
   try {
     const { coin1 = "bitcoin", coin2 = "ethereum" } = req.query;
 
-    // Call the existing compare endpoint internally
+    // Call compare endpoint internally
     const url = `${req.protocol}://${req.get("host")}/api/compare`;
     const response = await axios.get(url, { params: { coin1, coin2 } });
 
-    const raw = response.data.data; // array of: { name, prices }
-
+    const raw = response.data.data; // [{ name, prices }]
     const flattened = [];
 
     for (const coin of raw) {
       const name = coin.name;
-      for (const [timestamp, price] of coin.prices) {
+
+      for (const [ts, price] of coin.prices) {
+        if (price == null || isNaN(price)) continue;
+
+        // === Keep ISO timestamps exactly ===
+        if (typeof ts === "string") {
+          if (isNaN(Date.parse(ts))) continue;
+          flattened.push({ coin: name, timestamp: ts, price });
+          continue;
+        }
+
+        // === Convert raw numbers to ISO ===
+        if (typeof ts === "number") {
+          const d = new Date(ts);
+          if (isNaN(d.getTime())) continue;
+          flattened.push({ coin: name, timestamp: d.toISOString(), price });
+          continue;
+        }
+
+        // === Fallback ===
+        const parsed = Date.parse(ts);
+        if (isNaN(parsed)) continue;
+
         flattened.push({
           coin: name,
-          timestamp,
+          timestamp: new Date(parsed).toISOString(),
           price
         });
       }
@@ -313,9 +334,7 @@ app.get("/api/compare_flat", async (req, res) => {
     return res.json(flattened);
   } catch (err) {
     console.error("❌ compare_flat error:", err.message);
-    return res.status(500).json({
-      error: "Failed to build flat comparison table"
-    });
+    return res.status(500).json({ error: "Failed to build flat comparison table" });
   }
 });
 
@@ -335,13 +354,40 @@ app.get("/api/compare_flat_all", async (req, res) => {
       const name = cached.data.name;
       const prices = cached.data.prices;
 
-      for (const [timestamp, price] of prices) {
-        const d = new Date(timestamp);
-        if (isNaN(d.getTime())) continue; // remove invalid timestamps
+      for (const [ts, price] of prices) {
+        if (price == null || isNaN(price)) continue;
+      
+        // === If timestamp is already ISO from preload — accept it directly ===
+        if (typeof ts === "string") {
+          if (isNaN(Date.parse(ts))) continue; // reject invalid strings
+          results.push({
+            coin: name,
+            timestamp: ts,       // ✔ KEEP EXACT STRING
+            price
+          });
+          continue;
+        }
+      
+        // === If it's numeric ===
+        if (typeof ts === "number") {
+          const d = new Date(ts);
+          if (isNaN(d.getTime())) continue;
+      
+          results.push({
+            coin: name,
+            timestamp: d.toISOString(),
+            price
+          });
+          continue;
+        }
+      
+        // === Anything else ===
+        const parsed = Date.parse(ts);
+        if (isNaN(parsed)) continue;
       
         results.push({
           coin: name,
-          timestamp: d.toISOString(),
+          timestamp: new Date(parsed).toISOString(),
           price
         });
       }
