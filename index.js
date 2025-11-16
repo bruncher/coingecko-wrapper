@@ -165,6 +165,13 @@ function alignTimeframes(series1, series2) {
   return [aligned1, aligned2];
 }
 
+// === Preload full chart data for key coins ===
+const PRELOAD_COINS = [
+  "bitcoin", "ethereum", "ripple", "binancecoin",
+  "solana", "tron", "dogecoin", "avalanche-2",
+  "uniswap", "crypto-com-chain", "aave", "matic-network"
+];
+
 app.get("/api/compare", async (req, res) => {
   const { coin1 = "bitcoin", coin2 = "ethereum" } = req.query;
   const key = [coin1, coin2].sort().join("_");
@@ -312,6 +319,38 @@ app.get("/api/compare_flat", async (req, res) => {
   }
 });
 
+// === Looker: All preloaded coins, flattened ===
+app.get("/api/compare_flat_all", async (req, res) => {
+  try {
+    const results = [];
+
+    for (const coinId of PRELOAD_COINS) {
+      const cached = compareCache[`preload_${coinId}`];
+
+      if (!cached || !cached.data || !cached.data.prices) {
+        console.warn(`⚠️ Missing preload data for ${coinId}`);
+        continue;
+      }
+
+      const name = cached.data.name;
+      const prices = cached.data.prices;
+
+      for (const [timestamp, price] of prices) {
+        results.push({
+          coin: name,
+          timestamp: new Date(timestamp).toISOString(),  // Looker-friendly
+          price
+        });
+      }
+    }
+
+    res.json(results);
+  } catch (err) {
+    console.error("❌ compare_flat_all error:", err.message);
+    res.status(500).json({ error: "Failed to build dataset" });
+  }
+});
+
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -414,13 +453,6 @@ async function staggeredCompareWarmup() {
 }
 
 setInterval(staggeredCompareWarmup, 60 * 60 * 1000);
-
-// === Preload full chart data for key coins ===
-const PRELOAD_COINS = [
-  "bitcoin", "ethereum", "ripple", "binancecoin",
-  "solana", "tron", "dogecoin", "avalanche-2",
-  "uniswap", "crypto-com-chain", "aave", "matic-network"
-];
 
 async function preloadChart(coinId) {
   console.log(`🔄 Preloading chart for ${coinId}...`);
