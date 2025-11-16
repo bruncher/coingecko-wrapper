@@ -5,22 +5,7 @@ import cors from "cors";
 function toLookerTimestamp(ts) {
   const d = new Date(ts);
   if (isNaN(d.getTime())) return null;
-
-  const pad = (n) => String(n).padStart(2, "0");
-
-  return (
-    d.getFullYear() +
-    "-" +
-    pad(d.getMonth() + 1) +
-    "-" +
-    pad(d.getDate()) +
-    " " +
-    pad(d.getHours()) +
-    ":" +
-    pad(d.getMinutes()) +
-    ":" +
-    pad(d.getSeconds())
-  );
+  return d.toISOString(); // <-- ISO format Looker loves
 }
 
 const app = express();
