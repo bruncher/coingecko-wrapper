@@ -345,15 +345,23 @@ app.get("/health", (req, res) => {
   });
 });
 
+const MAX_WARMUP_ATTEMPTS = 12; // or 20, or whatever you want
+
 // === Startup warm-up ===
 async function warmUp(attempt = 1) {
-  console.log(`🚀 Warm-up starting (attempt ${attempt})...`);
+  console.log(`🔄 Warm-up attempt ${attempt}/${MAX_WARMUP_ATTEMPTS}...`);
+
   try {
-    await fetchCoinData(true);
-    console.log("🟢 Warm-up successful — cache ready");
+    await fetchCoinData(true); // force=true, refreshes the price list
+    console.log("✅ Price API warm-up OK");
   } catch (err) {
-    console.warn(`⚠️ Warm-up failed (attempt ${attempt}): ${err.message}`);
-    if (attempt < 5) setTimeout(() => warmUp(attempt + 1), 60000);
+    console.log(`⚠️ Warm-up failed (attempt ${attempt}): ${err?.response?.status || err.message}`);
+    if (attempt < MAX_WARMUP_ATTEMPTS) {
+      console.log("⏳ Retrying warm-up in 60s...");
+      return setTimeout(() => warmUp(attempt + 1), 60000);
+    } else {
+      console.log("❌ Max warm-up attempts reached. Giving up.");
+    }
   }
 }
 
