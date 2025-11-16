@@ -357,14 +357,22 @@ async function warmUp(attempt = 1) {
   }
 }
 
-// === Prewarm top compare pairs hourly ===
-const topPairs = [["bitcoin", "ethereum"], ["solana", "cardano"], ["dogecoin", "shiba-inu"]];
-setInterval(() => {
-  console.log("🔥 Prewarming top compare pairs...");
-  topPairs.forEach(([a, b]) =>
-    retryQueue.push({ coin1: a, coin2: b, attempt: 1 })
-  );
-}, 60 * 60 * 1000);
+// === Prewarm top compare pairs hourly (staggered and safe) ===
+const TOP_COMPARE_PAIRS = [
+  ["bitcoin", "ethereum"],
+];
+
+async function staggeredCompareWarmup() {
+  console.log("🔥 Staggered compare warm-up starting...");
+
+  for (const [a, b] of TOP_COMPARE_PAIRS) {
+    console.log(`⏳ Prewarming ${a}_${b} in 3s...`);
+    await new Promise(r => setTimeout(r, 3000)); // spacing to prevent 429
+    retryQueue.push({ coin1: a, coin2: b, attempt: 1 });
+  }
+}
+
+setInterval(staggeredCompareWarmup, 60 * 60 * 1000);
 
 // === Preload full chart data for key coins ===
 const PRELOAD_COINS = [
