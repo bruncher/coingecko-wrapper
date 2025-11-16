@@ -2,6 +2,27 @@ import express from "express";
 import axios from "axios";
 import cors from "cors";
 
+function toLookerTimestamp(ts) {
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return null;
+
+  const pad = (n) => String(n).padStart(2, "0");
+
+  return (
+    d.getFullYear() +
+    "-" +
+    pad(d.getMonth() + 1) +
+    "-" +
+    pad(d.getDate()) +
+    " " +
+    pad(d.getHours()) +
+    ":" +
+    pad(d.getMinutes()) +
+    ":" +
+    pad(d.getSeconds())
+  );
+}
+
 const app = express();
 app.use(cors());
 
@@ -307,7 +328,7 @@ app.get("/api/compare_flat", async (req, res) => {
         // === Keep ISO timestamps exactly ===
         if (typeof ts === "string") {
           if (isNaN(Date.parse(ts))) continue;
-          flattened.push({ coin: name, timestamp: ts, price });
+          flattened.push({ coin: name, timestamp: toLookerTimestamp(ts), price });
           continue;
         }
 
@@ -315,7 +336,7 @@ app.get("/api/compare_flat", async (req, res) => {
         if (typeof ts === "number") {
           const d = new Date(ts);
           if (isNaN(d.getTime())) continue;
-          flattened.push({ coin: name, timestamp: d.toISOString(), price });
+          flattened.push({ coin: name, timestamp: toLookerTimestamp(ts), price });
           continue;
         }
 
@@ -325,7 +346,7 @@ app.get("/api/compare_flat", async (req, res) => {
 
         flattened.push({
           coin: name,
-          timestamp: new Date(parsed).toISOString(),
+          timestamp: toLookerTimestamp(parsed),
           price
         });
       }
@@ -362,7 +383,7 @@ app.get("/api/compare_flat_all", async (req, res) => {
           if (isNaN(Date.parse(ts))) continue; // reject invalid strings
           results.push({
             coin: name,
-            timestamp: ts,       // ✔ KEEP EXACT STRING
+            timestamp: toLookerTimestamp(ts),
             price
           });
           continue;
@@ -375,7 +396,7 @@ app.get("/api/compare_flat_all", async (req, res) => {
       
           results.push({
             coin: name,
-            timestamp: d.toISOString(),
+            timestamp: toLookerTimestamp(ts),
             price
           });
           continue;
@@ -387,7 +408,7 @@ app.get("/api/compare_flat_all", async (req, res) => {
       
         results.push({
           coin: name,
-          timestamp: new Date(parsed).toISOString(),
+          timestamp: toLookerTimestamp(parsed),
           price
         });
       }
@@ -516,7 +537,7 @@ async function preloadChart(coinId) {
       .map(([ts, price]) => {
         const d = new Date(ts);
         if (isNaN(d.getTime())) return null;               // skip invalid timestamps
-        return [ d.toISOString(), price ];                 // convert to ISO string
+        return [ toLookerTimestamp(ts), price ];               // convert to ISO string
       })
       .filter(Boolean);                                     // drop null rows
     
@@ -542,7 +563,7 @@ async function preloadChart(coinId) {
           .map(([ts, price]) => {
             const d = new Date(ts);
             if (isNaN(d.getTime())) return null;               // skip invalid timestamps
-            return [ d.toISOString(), price ];                 // convert to ISO string
+            return [ toLookerTimestamp(ts), price ];                // convert to ISO string
           })
           .filter(Boolean);                                     // drop null rows
         
