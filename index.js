@@ -4,18 +4,13 @@ import cors from "cors";
 
 function toLookerTimestamp(ts) {
   const d = new Date(ts);
-  if (isNaN(d.getTime())) return null;
-
-  const pad = (n) => n.toString().padStart(2, "0");
-
-  return (
-    d.getUTCFullYear().toString() +
-    pad(d.getUTCMonth() + 1) +
-    pad(d.getUTCDate()) +
-    pad(d.getUTCHours()) +
-    pad(d.getUTCMinutes()) +
-    pad(d.getUTCSeconds())
-  );
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  const hh = String(d.getUTCHours()).padStart(2, "0");
+  const mi = String(d.getUTCMinutes()).padStart(2, "0");
+  const ss = String(d.getUTCSeconds()).padStart(2, "0");
+  return `${yyyy}${mm}${dd}${hh}${mi}${ss}`;
 }
 
 const app = express();
@@ -373,37 +368,23 @@ app.get("/api/compare_flat_all", async (req, res) => {
       for (const [ts, price] of prices) {
         if (price == null || isNaN(price)) continue;
       
-        // === If timestamp is already ISO from preload — accept it directly ===
-        if (typeof ts === "string") {
-          if (isNaN(Date.parse(ts))) continue; // reject invalid strings
-          results.push({
-            coin: name,
-            timestamp: toLookerTimestamp(ts),
-            price
-          });
-          continue;
-        }
+        let convertedTs = null;
       
-        // === If it's numeric ===
         if (typeof ts === "number") {
-          const d = new Date(ts);
-          if (isNaN(d.getTime())) continue;
-      
-          results.push({
-            coin: name,
-            timestamp: toLookerTimestamp(ts),
-            price
-          });
-          continue;
+          convertedTs = toLookerTimestamp(ts);
+        } else if (typeof ts === "string") {
+          const parsed = Date.parse(ts);
+          if (!isNaN(parsed)) convertedTs = toLookerTimestamp(parsed);
+        } else {
+          const parsed = Date.parse(ts);
+          if (!isNaN(parsed)) convertedTs = toLookerTimestamp(parsed);
         }
       
-        // === Anything else ===
-        const parsed = Date.parse(ts);
-        if (isNaN(parsed)) continue;
+        if (!convertedTs) continue;
       
         results.push({
           coin: name,
-          timestamp: toLookerTimestamp(parsed),
+          timestamp: convertedTs,
           price
         });
       }
@@ -532,7 +513,7 @@ async function preloadChart(coinId) {
       .map(([ts, price]) => {
         const d = new Date(ts);
         if (isNaN(d.getTime())) return null;               // skip invalid timestamps
-        return [ toLookerTimestamp(ts), price ];               // convert to ISO string
+        return [ ts, price ]; // keep raw UNIX ms timestamp
       })
       .filter(Boolean);                                     // drop null rows
     
@@ -558,7 +539,7 @@ async function preloadChart(coinId) {
           .map(([ts, price]) => {
             const d = new Date(ts);
             if (isNaN(d.getTime())) return null;               // skip invalid timestamps
-            return [ toLookerTimestamp(ts), price ];                // convert to ISO string
+            return [ ts, price ]; // keep raw UNIX ms timestamp
           })
           .filter(Boolean);                                     // drop null rows
         
