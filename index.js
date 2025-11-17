@@ -315,28 +315,18 @@ app.get("/api/compare_flat", async (req, res) => {
       for (const [ts, price] of coin.prices) {
         if (price == null || isNaN(price)) continue;
 
-        // === Keep ISO timestamps exactly ===
-        if (typeof ts === "string") {
-          if (isNaN(Date.parse(ts))) continue;
-          flattened.push({ coin: name, timestamp: toLookerTimestamp(ts), price });
-          continue;
-        }
+        let parsedTs = ts;
 
-        // === Convert raw numbers to ISO ===
-        if (typeof ts === "number") {
-          const d = new Date(ts);
-          if (isNaN(d.getTime())) continue;
-          flattened.push({ coin: name, timestamp: toLookerTimestamp(ts), price });
-          continue;
+        // Raw timestamps are numbers (ms)
+        if (typeof ts !== "number") {
+          const parsed = Date.parse(ts);
+          if (isNaN(parsed)) continue;
+          parsedTs = parsed;
         }
-
-        // === Fallback ===
-        const parsed = Date.parse(ts);
-        if (isNaN(parsed)) continue;
 
         flattened.push({
           coin: name,
-          timestamp: toLookerTimestamp(parsed),
+          timestamp: toLookerTimestamp(parsedTs),
           price
         });
       }
@@ -349,39 +339,89 @@ app.get("/api/compare_flat", async (req, res) => {
   }
 });
 
+async function ensurePreloadedCoin(coinId) {
+  const key = `preload_${coinId}`;
+
+  // already cached?
+  if (compareCache[key] && compareCache[key].data && compareCache[key].data.prices?.length > 0) {
+    return compareCache[key];
+  }
+
+  console.log(`🔄 On-demand preload for ${coinId}...`);
+
+  try {
+    const url = `https://api.coingecko.com/api/v3/coins/${coinId}/market_chart`;
+    const params = { vs_currency: "usd", days: 365, interval: "daily" };
+
+    const data = await fetchWithRetry(url, params);
+
+    const cleanPrices = (data.prices || [])
+      .filter(p => Array.isArray(p) && p.length === 2)
+      .map(([ts, price]) => [ts, price]);
+
+    compareCache[key] = {
+      timestamp: Date.now(),
+      data: { name: coinId, prices: cleanPrices }
+    };
+
+    console.log(`✅ On-demand preload OK for ${coinId}`);
+    return compareCache[key];
+  } catch (err) {
+    console.warn(`❌ On-demand preload FAILED for ${coinId}: ${err.message}`);
+    return null;
+  }
+}
+
 // === Looker: All preloaded coins, flattened ===
 app.get("/api/compare_flat_all", async (req, res) => {
   try {
+    // ── 1) Use ?coins=a,b,c if provided, otherwise use preload list ─────────
+    let coinList = [];
+
+    if (req.query.coins) {
+      coinList = req.query.coins
+        .split(",")
+        .map(c => c.trim().toLowerCase())
+        .filter(Boolean);
+    } else {
+      coinList = PRELOAD_COINS;
+    }
+
     const results = [];
 
-    for (const coinId of PRELOAD_COINS) {
-      const cached = compareCache[`preload_${coinId}`];
+    // ── 2) Iterate through each requested coin ─────────────────────────────
+    for (const coinId of coinList) {
+      let cached = compareCache[`preload_${coinId}`];
 
+      if (!cached) {
+        cached = await ensurePreloadedCoin(coinId);
+      }
+      
       if (!cached || !cached.data || !cached.data.prices) {
-        console.warn(`⚠️ Missing preload data for ${coinId}`);
+        console.warn(`⚠️ Still no data for ${coinId}`);
         continue;
       }
 
       const name = cached.data.name;
       const prices = cached.data.prices;
 
+      // ── 3) Flatten timestamps for Looker ───────────────────────────────
       for (const [ts, price] of prices) {
         if (price == null || isNaN(price)) continue;
-      
-        let convertedTs = null;
-      
+
+        let convertedTs;
+
         if (typeof ts === "number") {
           convertedTs = toLookerTimestamp(ts);
-        } else if (typeof ts === "string") {
-          const parsed = Date.parse(ts);
-          if (!isNaN(parsed)) convertedTs = toLookerTimestamp(parsed);
         } else {
           const parsed = Date.parse(ts);
-          if (!isNaN(parsed)) convertedTs = toLookerTimestamp(parsed);
+          if (!isNaN(parsed)) {
+            convertedTs = toLookerTimestamp(parsed);
+          }
         }
-      
+
         if (!convertedTs) continue;
-      
+
         results.push({
           coin: name,
           timestamp: convertedTs,
