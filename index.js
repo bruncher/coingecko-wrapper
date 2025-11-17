@@ -405,12 +405,26 @@ app.get("/api/compare_flat_all", async (req, res) => {
       const name = cached.data.name;
       const prices = cached.data.prices;
 
-      // ── 3) Flatten timestamps for Looker ───────────────────────────────
+      // --- 3) Compute pct_change from first valid price ---
+      let firstPrice = null;
+      for (const [ts, price] of prices) {
+        if (price != null && !isNaN(price)) {
+          firstPrice = price;
+          break;
+        }
+      }
+      
+      if (!firstPrice) {
+        console.warn(`⚠️ No valid first price for ${coinId}`);
+        continue;
+      }
+      
+      // --- 4) Flatten rows with pct_change included ---
       for (const [ts, price] of prices) {
         if (price == null || isNaN(price)) continue;
-
+      
         let convertedTs;
-
+      
         if (typeof ts === "number") {
           convertedTs = toLookerTimestamp(ts);
         } else {
@@ -419,13 +433,16 @@ app.get("/api/compare_flat_all", async (req, res) => {
             convertedTs = toLookerTimestamp(parsed);
           }
         }
-
+      
         if (!convertedTs) continue;
-
+      
+        const pct_change = (price - firstPrice) / firstPrice; // decimal form
+      
         results.push({
           coin: name,
           timestamp: convertedTs,
-          price
+          price,
+          pct_change
         });
       }
     }
