@@ -437,6 +437,42 @@ app.get("/api/compare_flat_all", async (req, res) => {
   }
 });
 
+// --- Single coin flat time-series for Looker Studio ---
+app.get("/api/flat_single", async (req, res) => {
+  try {
+    const coinId = (req.query.coin || "").toLowerCase().trim();
+    if (!coinId) {
+      return res.status(400).json({ error: "Missing ?coin= parameter" });
+    }
+
+    // Try cache first
+    let cached = compareCache[`preload_${coinId}`];
+
+    // If not preloaded yet, load once
+    if (!cached) {
+      cached = await ensurePreloadedCoin(coinId);
+    }
+
+    if (!cached || !cached.data || !cached.data.prices) {
+      return res.json([]);
+    }
+
+    const name = cached.data.name;
+    const prices = cached.data.prices;
+
+    const results = prices.map(([ts, price]) => ({
+      coin: name,
+      timestamp: toLookerTimestamp(ts),
+      price
+    }));
+
+    res.json(results);
+  } catch (err) {
+    console.error("❌ flat_single error:", err.message);
+    res.status(500).json({ error: "Failed to build single coin dataset" });
+  }
+});
+
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
