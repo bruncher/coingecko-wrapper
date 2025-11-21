@@ -686,3 +686,10 @@ app.listen(PORT, () => {
 
   startKeepAlive();
 });
+
+// === Auto-refresh preloaded charts every 12 hours ===
+const THREE_HOURS = 3 * 60 * 60 * 1000;
+setInterval(() => {
+  console.log("⏳ Scheduled 3-hour chart preload starting...");
+  preloadAllCharts();
+}, THREE_HOURS);
