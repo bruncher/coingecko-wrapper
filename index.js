@@ -581,6 +581,24 @@ async function warmUp(attempt = 1) {
   }
 }
 
+async function checkCacheAfterSleep() {
+  const now = Date.now();
+
+  // If cache is empty, trigger warm-up internally
+  if (!cache) {
+    console.log("⚡ Cache empty — running internal warm-up...");
+    try {
+      await warmUp();
+      await preloadAllCharts();
+    } catch (err) {
+      console.warn("⚠️ Internal warm-up failed:", err.message);
+    }
+  }
+}
+
+// Run every 30 minutes to ensure cache isn't empty from
+setInterval(() => { checkCacheAfterSleep(); }, 30 * 60 * 1000);
+
 // === Prewarm top compare pairs hourly (staggered and safe) ===
 const TOP_COMPARE_PAIRS = [
   ["bitcoin", "ethereum"],
