@@ -556,6 +556,11 @@ app.get("/health", (req, res) => {
   });
 });
 
+// === Simple ping endpoint ===
+app.get("/ping", (req, res) => {
+  res.json({ status: "alive", timestamp: new Date().toISOString() });
+});
+
 const MAX_WARMUP_ATTEMPTS = 12; // or 20, or whatever you want
 
 // === Startup warm-up ===
@@ -659,12 +664,12 @@ async function preloadAllCharts() {
 }
 
 // === Keep-alive self-ping ===
-function startKeepAlive() {
+async function startKeepAlive() {
   const url = process.env.RENDER_EXTERNAL_URL || "https://coingecko-wrapper.onrender.com";
   console.log("🔄 Keep-alive pinger active — every 10 min");
   setInterval(async () => {
     try {
-      await axios.get(`${url}/health`);
+      await axios.get(`${url}/ping`);
       console.log("💓 Keep-alive ping successful");
     } catch (err) {
       console.warn("💔 Keep-alive ping failed:", err.message);
